@@ -267,10 +267,10 @@ begin
             if ROI < FMinROI then begin Inc(SkippedPairs); Inc(SkippedReasonNotProfitable); Continue; end;
 
             SourceRegionName  := FRegionManager.RegionIDToName(SourceRegionID);
-            DestRegionName    := FRegionManager.RegionIDToName(DestRegionID);
             SourceStationName := FRegionManager.StationIDToName(BestSellOrder.station_id);
-            DestStationName   := FRegionManager.StationIDToName(BestBuyOrder.station_id);
+            DestRegionName    := FRegionManager.RegionIDToName(DestRegionID);
             DestSystemID      := BestBuyOrder.system_id;
+            DestStationName   := FRegionManager.StationIDToName(BestBuyOrder.station_id);
 
             if (SourceStationName = 'Upwell Citadel') or (DestStationName = 'Upwell Citadel') and not FStationType then begin Inc(SkippedPairs); Inc(SkippedReasonBadStations); Continue; end;
             BuyerRange := BestBuyOrder.range;
@@ -447,7 +447,6 @@ procedure TOrderAnalyzer.OutputResultsToGrid(Grid: TStringGrid; SortCol: Integer
 const
   HEADER_COUNT = 13;
 var
-  SecurityGradient: array[0..10] of TColor;
   MaxWidth, Row, c, w, tw: Integer;
   HEADERS: array[0..HEADER_COUNT] of string;
   CellText, VolumeStr: string;
@@ -468,18 +467,6 @@ begin
   HEADERS[10] := 'Jumps';
   HEADERS[11] := 'Profit Per Jump';
   HEADERS[12] := 'ROI';
-
-  SecurityGradient[10] := COLOR_SECURITY_10;
-  SecurityGradient[9]  := COLOR_SECURITY_9;
-  SecurityGradient[8]  := COLOR_SECURITY_8;
-  SecurityGradient[7]  := COLOR_SECURITY_7;
-  SecurityGradient[6]  := COLOR_SECURITY_6;
-  SecurityGradient[5]  := COLOR_SECURITY_5;
-  SecurityGradient[4]  := COLOR_SECURITY_4;
-  SecurityGradient[3]  := COLOR_SECURITY_3;
-  SecurityGradient[2]  := COLOR_SECURITY_2;
-  SecurityGradient[1]  := COLOR_SECURITY_1;
-  SecurityGradient[0]  := COLOR_SECURITY_0;
 
   Grid.ColCount := HEADER_COUNT;
   Grid.RowCount := FAnalyzerResults.Count + 1;
@@ -556,7 +543,7 @@ begin
 
     secColorIdx := Max(Round(SortedTradeResults[Row-1].SourceSecurity * 10), 0);
     secRating := Round(SortedTradeResults[Row-1].SourceSecurity * 10) / 10;
-    CellColors[1, Row] := SecurityGradient[secColorIdx];
+    CellColors[1, Row] := SecurityColors[secColorIdx];
     Grid.Cells[1, Row] := SortedTradeResults[Row-1].SourceStation + ' (' + secRating.ToString() + ')';
 
     Grid.Cells[2, Row] := VolumeStr;
@@ -566,14 +553,14 @@ begin
     begin
       secColorIdx := Max(Round(FRegionManager.StationIDToSecurity(SortedTradeResults[Row-1].DeliveryStationID) * 10), 0);
       secRating := Round(FRegionManager.StationIDToSecurity(SortedTradeResults[Row-1].DeliveryStationID) * 10) / 10;
-      CellColors[4, Row] := SecurityGradient[secColorIdx];
+      CellColors[4, Row] := SecurityColors[secColorIdx];
       Grid.Cells[4, Row] := FRegionManager.StationIDToName((SortedTradeResults[Row-1].DeliveryStationID)) + ' (' + secRating.ToString() + ')';
     end
     else
     begin
       secColorIdx := Max(Round(SortedTradeResults[Row-1].DestSecurity * 10), 0);
       secRating := Round(SortedTradeResults[Row-1].DestSecurity * 10) / 10;
-      CellColors[4, Row] := SecurityGradient[secColorIdx];
+      CellColors[4, Row] := SecurityColors[secColorIdx];
       Grid.Cells[4, Row] := SortedTradeResults[Row-1].DestStation + ' (' + secRating.ToString() + ')';
     end;
     Grid.Cells[5, Row] := FmtFloat(SortedTradeResults[Row-1].SellPrice, 2);

@@ -16,10 +16,15 @@ uses
   Logger in 'Logger.pas',
   CacheHelper in 'CacheHelper.pas',
   ESIClient in 'ESIClient.pas',
-  Common in 'Common.pas' {$R *.res},
+  Common in 'Common.pas',
+  MarketTreeBuilder in 'MarketTreeBuilder.pas',
+  MarketTreeAsyncBuilder in 'MarketTreeAsyncBuilder.pas',
+  RouteTools in 'RouteTools.pas',
   Vcl.Themes,
-  Vcl.Styles;
+  Vcl.Styles,
+  GridHelper in 'GridHelper.pas';
 
+{$R *.res}
 begin
   Application.Initialize;
   Application.MainFormOnTaskbar := True;

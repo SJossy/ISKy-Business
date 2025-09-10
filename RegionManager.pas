@@ -106,6 +106,7 @@ type
 
     procedure SystemsWithinJumpsOf(StartSystemID, MaxJumps: Integer; out SystemsArr: TArray<Integer>; out DistanceMap: TDictionary<Integer, Integer>);
     function AllSystemIDs: TArray<Integer>;
+    function AllSystems: TArray<TSystemsRec>;
     function SystemCount: Integer;
     function SystemHasStation(SystemID: Integer): Boolean;
     function SystemIndexToRec(Index: Integer): TSystemsRec;
@@ -1162,6 +1163,10 @@ begin
   end;
 end;
 
+function TRegionManager.AllSystems: TArray<TSystemsRec>;
+begin
+  Result := FParser.FSystems.Values.ToArray;
+end;
 
 function TRegionManager.SystemsInRegion(RegionID: Integer): TArray<Integer>;
 var

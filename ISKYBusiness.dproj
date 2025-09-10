@@ -148,6 +148,10 @@
         <DCCReference Include="Common.pas">
             <Form>$R *.res</Form>
         </DCCReference>
+        <DCCReference Include="MarketTreeBuilder.pas"/>
+        <DCCReference Include="MarketTreeAsyncBuilder.pas"/>
+        <DCCReference Include="RouteTools.pas"/>
+        <DCCReference Include="GridHelper.pas"/>
         <RcItem Include="assets\SKIN.png">
             <ResourceType>RCDATA</ResourceType>
             <ResourceId>SKIN</ResourceId>

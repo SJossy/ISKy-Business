@@ -227,7 +227,9 @@ const
     'SCC-Approved ISKy Business',
     'Route Master—Earn Faster');
 
-
+  MIN_ZOOM = 1;
+  MAX_ZOOM = 8;
+  LABEL_FADE_MARGIN = 20; // Pixels from edge where fading begins
 
   USER_AGENT = 'ISKY Business/0.0.0 (steven@jossy.co)';
 

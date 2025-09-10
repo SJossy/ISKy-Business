@@ -7,48 +7,16 @@ uses
   Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.StdCtrls, Vcl.Imaging.pngimage,
   Vcl.ExtCtrls, Vcl.Grids, Vcl.ComCtrls, System.Net.URLClient, System.Generics.Collections,
   System.Net.HttpClient, System.Net.HttpClientComponent, Vcl.NumberBox, Math, System.Threading,
-  System.ImageList, Vcl.ImgList, Vcl.Tabs, System.Generics.Defaults, Vcl.Menus,
+  System.ImageList, Vcl.ImgList, Vcl.Tabs, System.Generics.Defaults, Vcl.Menus, System.Diagnostics,
   System.UITypes, Vcl.Buttons, System.IOUtils, System.SyncObjs, Types, GDIPAPI, GDIPOBJ,
-  Vcl.ButtonStylesAttributes, OrderAnalyzer, Vcl.Samples.Spin, System.Variants,
-  Logger, Common, EsiClient, Parser, FileUtils, Downloader, RegionManager,
-  TransactionView, System.RegularExpressions;
+  Vcl.ButtonStylesAttributes, OrderAnalyzer, Vcl.Samples.Spin, System.Variants, System.RegularExpressions,
+  Logger, Common, EsiClient, Parser, FileUtils, Downloader, RegionManager, RouteTools,
+  MarketTreeBuilder , TransactionView, GridHelper;
 
 
 type
   TRouteSegmentFormatter = function(const Rec: TSystemsRec): string;
   TLogProc = procedure(const Msg: string) of object;
-
-  TMarketTreeNodeRecOld = record
-    ParentGroupID: string;
-    MarketGroupID: string;
-    TypeID: Integer;
-    Name: string;
-    IsItem: Boolean;
-    HasTypes: Boolean;
-  end;
-  PMarketTreeNodeRecOld = ^TMarketTreeNodeRecOld;
-
-  TFilteredNode = record
-    ParentID: string;
-    Name: string;
-    ID: string;
-    IsGroup: Boolean;
-    StateIndex: Integer;
-    TypeID: Integer;
-  end;
-
-  TMarketTreeNodeRec = record
-    ParentGroupID: string;
-    MarketGroupID: string;
-    Name: string;
-    IsItem: Boolean;
-    HasTypes: Boolean;
-    TypeID: Integer;
-    IconID: Integer;
-    Description: string;
-  end;
-  PMarketTreeNodeRec = ^TMarketTreeNodeRec;
-  TMarketTreeNodeHook = reference to function(const NodeRec: TMarketTreeNodeRec; ParentNode: TTreeNode): TTreeNode;
 
   TSystemIDToRecFunc = function(SystemID: Integer): TSystemsRec of object;
   TNodeHintWindow = class(THintWindow);
@@ -128,7 +96,6 @@ type
     BalloonHint1: TBalloonHint;
     PanelRouteDetails: TPanel;
     PaintBoxItemType: TPaintBox;
-//    procedure TreeViewMarketMouseUp(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
     procedure FormCreate(Sender: TObject);
     procedure FormDestroy(Sender: TObject);
     procedure ListboxRegionsMouseDown(Sender: TObject; Button: TMouseButton;
@@ -194,26 +161,19 @@ type
     Parser: TParser;
     FRootGroupOrder: TList<string>;
     FLastFullTree: Boolean;
-    MarketTreeCacheOld: TList<TMarketTreeNodeRecOld>;
     FMarketTreeIsFiltered: Boolean;
     MapBitmap: TBitMap;
     RouteBitmap: TBitMap;
     CellColors: array of array of TColor;
-    ClampedZoom: Double;
-    SystemRecs: TArray<TSystemsRec>;
-    Cx, Cy: array of Integer;
     ItemBitmap: TBitMap;
+    SystemRecs: TArray<TSystemsRec>;
+    Cx, Cy: TArray<Integer>;
+    ClampedZoom: Double;
     procedure LoadOrCreateTradeHistoryDict(var Dict: TDictionary<Integer, TTradeHistoryRec>; const FileName: string);
     procedure OutputTradeHistory(SortCol: Integer);
-    procedure BuildMarketTree(TreeView: TTreeView; const GroupMap: TDictionary<string, TMarketGroupRec>; const ChildMap: TDictionary<string, TList<string>>; const TypesDict: TDictionary<Integer, TTypesRec>);
-    procedure BuildFilteredMarketTree(TreeView: TTreeView; const GroupMap: TDictionary<string, TMarketGroupRec>; const ChildMap: TDictionary<string, TList<string>>; const FilterGroups: THashSet<string>; const FilterItems: TDictionary<Integer, TTypesRec>);
-    procedure FilterMarketTree(const FilterText: string);
     procedure PopulateListBoxRegions;
     procedure SetupGrids;
-    procedure ResetMarketTree;
     procedure ClearResults;
-    procedure DrawRouteEveStyle(Bitmap: TBitmap; const Route: TJumpRoute; MarginPct: Double = 0.12);
-    procedure ClampPanInView(var PanX, PanY: Integer; const Cx, Cy: array of Integer; PBWidth, PBHeight: Integer);
     function GetNextTradeHistoryID: Integer;
     function GetSelectedTypeIDs(TreeView: TTreeView): TArray<Integer>;
     procedure HideNodeHint;
@@ -228,9 +188,7 @@ var
   FAnalyzerResults: TList<TOrderTripResult>;
   FSortDesc: Boolean;
   FSortCol: Integer;
-  FilteredNodes: TList<TFilteredNode>;
   Logger: TLogger;
-  itemData: PMarketTreeNodeRec;
   TradeHistory: TDictionary<Integer, TTradeHistoryRec>;
   FAllocatedTreeNodeCount: Integer;
   FFreedTreeNodeCount: Integer;
@@ -254,10 +212,6 @@ var
   RouteGapLen: Integer = 8;
   NodeHint: TNodeHintWindow = nil;
   EmptyRoute: TJumpRoute;
-const
-  MIN_ZOOM = 1;
-  MAX_ZOOM = 8;
-  LABEL_FADE_MARGIN = 20; // Pixels from edge where fading begins
 implementation
 {$R *.dfm}
 
@@ -270,29 +224,6 @@ begin
   else
     Result := Value;
 end;
-
-function FadeAlpha(LabelX, LabelY, LabelWidth, LabelHeight: Integer; PBWidth, PBHeight, Margin: Integer): Integer;
-var
-  fx, fy: Double;
-begin
-  fx := 1.0;
-  fy := 1.0;
-  // Fade on left/right
-  if LabelX < Margin then
-    fx := ClampDouble((LabelX - 0) / Margin, 0, 1)
-  else if LabelX + LabelWidth > PBWidth - Margin then
-    fx := ClampDouble((PBWidth - (LabelX + LabelWidth)) / Margin, 0, 1);
-
-  // Fade on top/bottom
-  if LabelY < Margin then
-    fy := ClampDouble((LabelY - 0) / Margin, 0, 1)
-  else if LabelY + LabelHeight > PBHeight - Margin then
-    fy := ClampDouble((PBHeight - (LabelY + LabelHeight)) / Margin, 0, 1);
-
-  // The minimum factor gives smooth fade toward closest edge
-  Result := Round(255 * Min(fx, fy));
-end;
-
 
 function MergeListBoxesUniqueIDs(lb1, lb2: TListBox): TArray<Integer>;
 var
@@ -339,37 +270,6 @@ begin
   Result := FormatFloat('#,##0.' + DupeString('0', Decimals), Value);
 end;
 
-function TraverseMarketTree(const GroupID: string; const GroupMap: TDictionary<string, TMarketGroupRec>; const ChildMap: TDictionary<string, TList<string>>; ParentNode: TTreeNode; Hook: TMarketTreeNodeHook): TTreeNode;
-var
-  GroupRec: TMarketGroupRec;
-  NodeRec: TMarketTreeNodeRec;
-  ChildList: TList<string>;
-  childID: string;
-  CurrentNode: TTreeNode;
-begin
-  if not GroupMap.TryGetValue(GroupID, GroupRec) then
-    Exit(nil);
-
-  NodeRec.ParentGroupID := GroupRec.parentGroupID;
-  NodeRec.MarketGroupID := GroupRec.marketGroupID;
-  NodeRec.Name := GroupRec.marketGroupName;
-  NodeRec.IsItem := False;
-  NodeRec.HasTypes := GroupRec.hasTypes = 1;
-  NodeRec.TypeID := 0;
-  NodeRec.IconID := GroupRec.iconID;
-  NodeRec.Description := GroupRec.description;
-
-  // Create node and store as parent for children
-  CurrentNode := Hook(NodeRec, ParentNode);
-
-  // Recurse into children using the just-created node as their parent
-  if ChildMap.TryGetValue(GroupID, ChildList) then
-    for childID in ChildList do
-      TraverseMarketTree(childID, GroupMap, ChildMap, CurrentNode, Hook);
-
-  Result := CurrentNode;
-end;
-
 procedure DrawBitmapSection(DestCanvas: TCanvas; DestRect: TRect; SrcBitmap: TBitmap; SrcRect: TRect);
 begin
   StretchBlt(
@@ -397,87 +297,6 @@ begin
   // else -- Dict is simply left empty
 end;
 
-
-procedure TForm1.BuildMarketTree(TreeView: TTreeView; const GroupMap: TDictionary<string, TMarketGroupRec>; const ChildMap: TDictionary<string, TList<string>>; const TypesDict: TDictionary<Integer, TTypesRec>);
-var
-  groupRec: TMarketGroupRec;
-begin
-  ResetMarketTree;
-  if FAllocatedTreeNodeCount <> FFreedTreeNodeCount then
-    ShowMessage(
-      'Potential memory leak! Allocated: ' + FAllocatedTreeNodeCount.ToString +
-      ' Freed: ' + FFreedTreeNodeCount.ToString
-    );
-  FAllocatedTreeNodeCount := 0;
-  FFreedTreeNodeCount := 0;
-  for groupRec in GroupMap.Values do
-    if (groupRec.parentGroupID = '') or SameText(groupRec.parentGroupID, 'None') then
-      TraverseMarketTree(
-        groupRec.marketGroupID,
-        GroupMap, ChildMap,
-        nil,
-        function(const NodeRec: TMarketTreeNodeRec; ParentNode: TTreeNode): TTreeNode
-        var
-          NewData: PMarketTreeNodeRec;
-          NewNode, ItemNode: TTreeNode;
-          typeRec: TTypesRec;
-          itemData: PMarketTreeNodeRec;
-        begin
-          // Create and attach group node
-          New(NewData);
-          Inc(FAllocatedTreeNodeCount);
-          NewData^ := NodeRec;
-          if ParentNode = nil then
-            NewNode := TreeView.Items.AddChild(nil, NodeRec.Name)
-          else
-            NewNode := TreeView.Items.AddChild(ParentNode, NodeRec.Name);
-          NewNode.Data := NewData;
-          Result := NewNode;
-
-          // ---- Add item nodes for this group ----
-          for typeRec in TypesDict.Values do
-          begin
-            if typeRec.marketGroupID = NodeRec.MarketGroupID then
-            begin
-              New(itemData);
-              Inc(FAllocatedTreeNodeCount);
-              itemData^.ParentGroupID := NodeRec.MarketGroupID;
-              itemData^.MarketGroupID := NodeRec.MarketGroupID;
-              itemData^.Name := typeRec.typeName;
-              itemData^.IsItem := True;
-              itemData^.TypeID := typeRec.typeID;
-              itemData^.HasTypes := False;
-              itemData^.IconID := typeRec.iconID;
-              itemData^.Description := typeRec.description;
-              ItemNode := TreeView.Items.AddChild(NewNode, itemData^.Name);
-              ItemNode.Data := itemData;
-            end;
-          end;
-        end
-      );
-  TreeView.SortType := stText;
-end;
-
-
-procedure FreeTreeNodeData(TreeView: TTreeView);
-var
-  i: Integer;
-begin
-  for i := 0 to TreeView.Items.Count - 1 do
-  if TreeView.Items[i].Data <> nil then
-  begin
-    Dispose(PMarketTreeNodeRec(TreeView.Items[i].Data));
-    Inc(FFreedTreeNodeCount);
-    TreeView.Items[i].Data := nil;
-  end;
-end;
-
-procedure TForm1.ResetMarketTree;
-begin
-  FreeTreeNodeData(TreeViewMarket);
-  TreeViewMarket.Items.Clear;
-end;
-
 procedure TForm1.AddManualTransaction1Click(Sender: TObject);
 begin
   FormTransaction.Mode := 'MANUAL';
@@ -487,7 +306,8 @@ begin
   begin
     TradeHistory.AddOrSetValue(GetNextTradeHistoryID, FormTransaction.ResultMarketOrder);
     Parser.SaveTradeHistory(TradeHistory);
-    OutputTradeHistory(0);
+    GridHelper.History.OutputToGrid(GridTradeHistory, TradeHistory, RegionManager, 0, FSortDescending);
+//    OutputTradeHistory(0);
   end;
 end;
 
@@ -504,151 +324,10 @@ begin
     begin
       TradeHistory.AddOrSetValue(FormTransaction.OrderID, FormTransaction.ResultMarketOrder);
       Parser.SaveTradeHistory(TradeHistory);
-      OutputTradeHistory(0);
+      GridHelper.History.OutputToGrid(GridTradeHistory, TradeHistory, RegionManager, 0, FSortDescending);
+      //OutputTradeHistory(0);
     end;
   end;
-end;
-
-procedure TForm1.BuildFilteredMarketTree(TreeView: TTreeView;
-  const GroupMap: TDictionary<string, TMarketGroupRec>;
-  const ChildMap: TDictionary<string, TList<string>>;
-  const FilterGroups: THashSet<string>;
-  const FilterItems: TDictionary<Integer, TTypesRec>);
-var
-  NodeMap: TDictionary<string, TTreeNode>;
-
-  procedure AddGroupNode(const GroupID: string; ParentNode: TTreeNode);
-  var
-    group: TMarketGroupRec;
-    node: TTreeNode;
-    childID: string;
-    children: TList<string>;
-    groupData: PMarketTreeNodeRec;
-    itemData: PMarketTreeNodeRec;
-    typeRec: TTypesRec;
-    itemNode: TTreeNode;
-  begin
-    if not GroupMap.TryGetValue(GroupID, group) then Exit;
-
-    // Allocate and assign group node data
-    New(groupData);
-    Inc(FAllocatedTreeNodeCount);
-    groupData^.ParentGroupID := group.parentGroupID;
-    groupData^.MarketGroupID := group.marketGroupID;
-    groupData^.Name := group.marketGroupName;
-    groupData^.IsItem := False;
-    groupData^.TypeID := 0;
-    groupData^.HasTypes := group.hasTypes = 1;
-    groupData^.IconID := group.iconID;
-    groupData^.Description := group.description;
-
-    node := TreeView.Items.AddChild(ParentNode, group.marketGroupName);
-    node.Data := groupData;
-    NodeMap.AddOrSetValue(GroupID, node);
-
-    // Add item nodes, each with properly allocated data
-    for typeRec in FilterItems.Values do
-      if typeRec.marketGroupID = GroupID then
-      begin
-        New(itemData);
-        Inc(FAllocatedTreeNodeCount);
-        itemData^.ParentGroupID := GroupID;
-        itemData^.MarketGroupID := GroupID;
-        itemData^.Name := typeRec.typeName;
-        itemData^.IsItem := True;
-        itemData^.TypeID := typeRec.typeID;
-        itemData^.HasTypes := False;
-        itemData^.IconID := 0; // If needed
-        itemData^.Description := ''; // If needed
-        itemNode := TreeView.Items.AddChild(node, itemData^.Name);
-        itemNode.Data := itemData;
-      end;
-
-    // Recursively add children
-    if ChildMap.TryGetValue(GroupID, children) then
-      for childID in children do
-        if FilterGroups.Contains(childID) then
-          AddGroupNode(childID, node);
-  end;
-
-begin
-  TreeView.Items.BeginUpdate;
-  NodeMap := TDictionary<string, TTreeNode>.Create;
-  try
-    // Free old Data pointers before clearing/building
-    ResetMarketTree;
-
-    for var groupRec in GroupMap.Values do
-      if ((groupRec.parentGroupID = '') or SameText(groupRec.parentGroupID, 'None'))
-        and FilterGroups.Contains(groupRec.marketGroupID) then
-        AddGroupNode(groupRec.marketGroupID, nil);
-
-    if TreeView.Items.Count = 0 then
-      TreeView.Items.Add(nil, 'No results found');
-
-    TreeView.SortType := stText;
-  finally
-    NodeMap.Free;
-    TreeView.Items.EndUpdate;
-  end;
-  TreeView.SortType := stText;
-end;
-
-
-
-
-procedure TForm1.FilterMarketTree(const FilterText: string);
-var
-  FilteredGroupIDs: THashSet<string>;
-  FilteredItems: TDictionary<Integer, TTypesRec>;
-  FilterLower: string;
-
-  // Recursively include parent groups of matching items or groups
-  procedure IncludeParentGroups(const GroupID: string);
-  var
-    ParentGroup: TMarketGroupRec;
-  begin
-    if not FilteredGroupIDs.Contains(GroupID) and Parser.FMarketGroups.TryGetValue(GroupID, ParentGroup) then
-    begin
-      FilteredGroupIDs.Add(GroupID);
-      if (ParentGroup.parentGroupID <> '') and (ParentGroup.parentGroupID <> 'None') then
-        IncludeParentGroups(ParentGroup.parentGroupID);
-    end;
-  end;
-
-begin
-  FilterLower := LowerCase(Trim(FilterText));
-  FilteredGroupIDs := THashSet<string>.Create;
-  FilteredItems := TDictionary<Integer, TTypesRec>.Create;
-  try
-    // 1. Add items matching the filter
-    for var typeRec in Parser.FTypes.Values do
-    begin
-      if (FilterLower = '') or (Pos(FilterLower, LowerCase(typeRec.typeName)) > 0) then
-      begin
-        FilteredItems.Add(typeRec.typeID, typeRec);
-        IncludeParentGroups(typeRec.marketGroupID);
-      end;
-    end;
-
-    // 2. Add groups (categories) matching the filter (name or description)
-    for var groupRec in Parser.FMarketGroups.Values do
-    begin
-      if (FilterLower = '') or
-         (Pos(FilterLower, LowerCase(groupRec.marketGroupName)) > 0) or
-         (Pos(FilterLower, LowerCase(groupRec.description)) > 0) then
-      begin
-        IncludeParentGroups(groupRec.marketGroupID);
-      end;
-    end;
-
-    BuildFilteredMarketTree(TreeViewMarket, Parser.FMarketGroups, Parser.FParentToChildren, FilteredGroupIDs, FilteredItems);
-  finally
-    FilteredGroupIDs.Free;
-    FilteredItems.Free;
-  end;
-  TreeViewMarket.FullExpand;
-  FMarketTreeIsFiltered := true;
 end;
 
 procedure TForm1.FindRouteTrades1Click(Sender: TObject);
@@ -672,9 +351,6 @@ begin
     PanelTradeResults.Caption := 'No Trades Found';
     PanelTradeResults.Visible := true;
   end
-
-
-
 end;
 
 procedure TForm1.chkEmpireSpaceOnlyClick(Sender: TObject);
@@ -767,25 +443,20 @@ begin
   end;
 end;
 
-
 function TForm1.GetSelectedTypeIDs(TreeView: TTreeView): TArray<Integer>;
-
-// Recursive helper to collect all item TypeIDs under a given node
   procedure CollectItemTypeIDs(Node: TTreeNode; IDs: TList<Integer>);
   var
     Child: TTreeNode;
-    NodeData: PMarketTreeNodeRec;
+    NodeData: TMarketTreeNodeData;
   begin
     if Node <> nil then
     begin
-      // Check if this node is an item
       if (Node.Data <> nil) then
       begin
-        NodeData := PMarketTreeNodeRec(Node.Data);
+        NodeData := TMarketTreeNodeData(Node.Data);
         if NodeData.IsItem then
           IDs.Add(NodeData.TypeID);
       end;
-      // Recurse child nodes
       Child := Node.getFirstChild;
       while Child <> nil do
       begin
@@ -794,7 +465,6 @@ function TForm1.GetSelectedTypeIDs(TreeView: TTreeView): TArray<Integer>;
       end;
     end;
   end;
-
 var
   IDs: TList<Integer>;
   i: Integer;
@@ -808,7 +478,7 @@ begin
       for i := 0 to TreeView.SelectionCount - 1 do
       begin
         Node := TreeView.Selections[i];
-        CollectItemTypeIDs(Node, IDs); // collect itemids for selection and all descendants
+        CollectItemTypeIDs(Node, IDs);
       end;
     end;
     Result := IDs.ToArray;
@@ -816,9 +486,6 @@ begin
     IDs.Free;
   end;
 end;
-
-
-
 
 procedure TForm1.lbToRegionsDragDrop(Sender, Source: TObject; X, Y: Integer);
 var
@@ -854,8 +521,6 @@ begin
   end;
 end;
 
-
-
 procedure TForm1.lbFromRegionsDragDrop(Sender, Source: TObject; X, Y: Integer);
 var
   i: Integer;
@@ -889,8 +554,6 @@ begin
     regionIDs.Free;
   end;
 end;
-
-
 
 procedure TForm1.lbFromRegionsDragOver(Sender, Source: TObject; X,
   Y: Integer; State: TDragState; var Accept: Boolean);
@@ -1048,7 +711,9 @@ end;
 procedure TForm1.pnlClearMarketFilterClick(Sender: TObject);
 begin
   EditFilterMarket.Text := '';
-  BuildMarketTree(TreeViewMarket, Parser.FMarketGroups, Parser.FParentToChildren, Parser.FTypes);
+  //BuildMarketTree(TreeViewMarket, Parser.FMarketGroups, Parser.FParentToChildren, Parser.FTypes);
+  TMarketTreeBuilder.BuildFullMarketTree(TreeViewMarket, Parser.FMarketGroups, Parser.FParentToChildren, Parser.FTypes);
+  //TMarketTreeAsyncBuilder.BuildFullMarketTreeAsync(TreeViewMarket, Parser.FMarketGroups, Parser.FParentToChildren, Parser.FTypes);
   TreeViewMarket.FullCollapse;
   FMarketTreeIsFiltered := false;
 end;
@@ -1063,14 +728,16 @@ begin
   Parser := TParser.Create(Logger);
   RegionManager := TRegionManager.Create(Parser, Logger);
   PopulateListBoxRegions;
-  BuildMarketTree(TreeViewMarket, Parser.FMarketGroups, Parser.FParentToChildren, Parser.FTypes);
+  //BuildMarketTree(TreeViewMarket, Parser.FMarketGroups, Parser.FParentToChildren, Parser.FTypes);
+  TMarketTreeBuilder.BuildFullMarketTree(TreeViewMarket, Parser.FMarketGroups, Parser.FParentToChildren, Parser.FTypes);
+  //TMarketTreeAsyncBuilder.BuildFullMarketTreeAsync(TreeViewMarket, Parser.FMarketGroups, Parser.FParentToChildren, Parser.FTypes);
   FLastFullTree := False;
   EmptyRoute := Default(TJumpRoute);
  end;
 
 procedure TForm1.FormDestroy(Sender: TObject);
 begin
-  MarketTreeCacheOld.Free;
+  //MarketTreeCacheOld.Free;
   if Assigned(Analyzer) then
     Analyzer.Free;
   FRootGroupOrder.Free;
@@ -1136,11 +803,6 @@ begin
   end;
 end;
 
-
-
-
-
-
 procedure TForm1.FormResize(Sender: TObject);
 begin
   lbFromRegions.Height  := Round((PanelSelectedRegions.Height - 48) / 2) -4;
@@ -1179,11 +841,14 @@ begin
     Parser.BuildAllPairsJumpsMatrix;
     PopulateListBoxRegions;
 
-    BuildMarketTree(TreeViewMarket, Parser.FMarketGroups, Parser.FParentToChildren, Parser.FTypes);
+    //BuildMarketTree(TreeViewMarket, Parser.FMarketGroups, Parser.FParentToChildren, Parser.FTypes);
+    TMarketTreeBuilder.BuildFullMarketTree(TreeViewMarket, Parser.FMarketGroups, Parser.FParentToChildren, Parser.FTypes);
+    //TMarketTreeAsyncBuilder.BuildFullMarketTreeAsync(TreeViewMarket, Parser.FMarketGroups, Parser.FParentToChildren, Parser.FTypes);
     TreeViewMarket.SortType := stText;
 
     LoadOrCreateTradeHistoryDict(TradeHistory, TradeHistoryBin);
-    OutputTradeHistory(0);
+    GridHelper.History.OutputToGrid(GridTradeHistory, TradeHistory, RegionManager, 0, FSortDescending);
+//    OutputTradeHistory(0);
 
     FormTransaction.RegionManager := RegionManager;
     FormTransaction.Downloader := Downloader;
@@ -1250,7 +915,8 @@ begin
     begin
       TradeHistory.AddOrSetValue(GetNextTradeHistoryID, FormTransaction.ResultMarketOrder);
       Parser.SaveTradeHistory(TradeHistory);
-      OutputTradeHistory(0);
+      GridHelper.History.OutputToGrid(GridTradeHistory, TradeHistory, RegionManager, 0, FSortDescending);
+      //OutputTradeHistory(0);
     end;
   end;
 end;
@@ -1309,7 +975,6 @@ var
   TypeName, VolumeStr, CellText: string;
   Rec: TTradeHistoryRec;
   NetProfit, NetBuy, NetSell, SalesTax, secRating: double;
-  SecurityGradient: array[0..10] of TColor;
   TradeList: TList<TPair<Integer, TTradeHistoryRec>>;
 begin
   // Set up headers (unchanged)
@@ -1328,17 +993,7 @@ begin
   HEADERS[12] := 'ROI';
   GridTradeHistory.ColCount := HEADER_COUNT;
   GridTradeHistory.RowCount := TradeHistory.Count + 1;
-  SecurityGradient[10] := COLOR_SECURITY_10;
-  SecurityGradient[9]  := COLOR_SECURITY_9;
-  SecurityGradient[8]  := COLOR_SECURITY_8;
-  SecurityGradient[7]  := COLOR_SECURITY_7;
-  SecurityGradient[6]  := COLOR_SECURITY_6;
-  SecurityGradient[5]  := COLOR_SECURITY_5;
-  SecurityGradient[4]  := COLOR_SECURITY_4;
-  SecurityGradient[3]  := COLOR_SECURITY_3;
-  SecurityGradient[2]  := COLOR_SECURITY_2;
-  SecurityGradient[1]  := COLOR_SECURITY_1;
-  SecurityGradient[0]  := COLOR_SECURITY_0;
+
   // Place headers
   for c := 0 to HEADER_COUNT do
     GridTradeHistory.Cells[c, 0] := HEADERS[c];
@@ -1429,13 +1084,13 @@ begin
       GridTradeHistory.Cells[2, Row] := TypeName;
       secColorIdx := Max(Round(RegionManager.StationIDToSecurity(Rec.BuyStationID)*10), 0);
       secRating := Round(RegionManager.StationIDToSecurity(Rec.BuyStationID)*10)/10;
-      CellColors[3, Row] := SecurityGradient[secColorIdx];
+      CellColors[3, Row] := SecurityColors[secColorIdx];
       GridTradeHistory.Cells[3, Row] := RegionManager.StationIDToName(Rec.BuyStationID) + ' (' + secRating.ToString() + ')';
       GridTradeHistory.Cells[4, Row] := VolumeStr;
       GridTradeHistory.Cells[5, Row] := FmtFloat(Rec.BuyPrice, 2);
       secColorIdx := Max(Round(RegionManager.StationIDToSecurity(Rec.SellStationID)*10), 0);
       secRating := Round(RegionManager.StationIDToSecurity(Rec.SellStationID)*10)/10;
-      CellColors[6, Row] := SecurityGradient[secColorIdx];
+      CellColors[6, Row] := SecurityColors[secColorIdx];
       GridTradeHistory.Cells[6, Row] := RegionManager.StationIDToName(Rec.SellStationID) + ' (' + secRating.ToString() + ')';
       GridTradeHistory.Cells[7, Row] := FmtFloat(Rec.SellPrice, 2);
       GridTradeHistory.Cells[8, Row] := FmtFloat(NetBuy, 2);
@@ -1579,7 +1234,6 @@ begin
     PanY := PanY + (Y - MousePanLastY);
     MousePanLastX := X;
     MousePanLastY := Y;
-    //HideNodeHint; // Or BalloonHint.HideHint, etc.
     PaintBoxTradeRoute.Invalidate;
     Application.CancelHint;
     Exit;
@@ -1696,335 +1350,28 @@ begin
     RouteBitmap := TBitmap.Create;
   RouteBitmap.SetSize(PaintBoxTradeRoute.Width, PaintBoxTradeRoute.Height);
 
-  DrawRouteEveStyle(RouteBitmap, MyRoute, 0.08);
-
+  //DrawRouteEveStyle(RouteBitmap, Regionmanager.AllSystems, MyRoute, SelectedNodeIdx, HilitedNodeIdx, Zoom, PanX, PanY, DashAnimPhase);
+  DrawRouteEveStyle(
+    RouteBitmap,
+    Regionmanager.AllSystems,          // dictionary or array of all TSystemsRec
+    MyRoute     ,        // route
+    SelectedNodeIdx,
+    HilitedNodeIdx,
+    SystemRecs,          // var
+    Cx,                  // var
+    Cy,                  // var
+    ClampedZoom,         // var
+    Zoom,
+    PanX, PanY,
+    DashAnimPhase,
+    0.12
+  );
   PaintBoxTradeRoute.Canvas.Draw(0, 0, RouteBitmap);
 
   // After painting, reset so future paints (not wheel-induced) use -1, -1.
   LastMouseX := -1;
   LastMouseY := -1;
 end;
-
-procedure TForm1.ClampPanInView(var PanX, PanY: Integer; const Cx, Cy: array of Integer; PBWidth, PBHeight: Integer);
-var
-  NodeLeft, NodeRight, NodeTop, NodeBottom: Integer;
-begin
-  NodeLeft := Cx[0];
-  NodeRight := Cx[0];
-  NodeTop := Cy[0];
-  NodeBottom := Cy[0];
-  for var i := 1 to High(Cx) do
-  begin
-    if Cx[i] < NodeLeft then NodeLeft := Cx[i];
-    if Cx[i] > NodeRight then NodeRight := Cx[i];
-    if Cy[i] < NodeTop then NodeTop := Cy[i];
-    if Cy[i] > NodeBottom then NodeBottom := Cy[i];
-  end;
-
-  // Right edge clamp
-  if NodeRight < 1 then
-    PanX := PanX + (1 - NodeRight);
-  // Left edge clamp
-  if NodeLeft > PBWidth - 1 then
-    PanX := PanX - (NodeLeft - (PBWidth - 1));
-  // Bottom edge clamp
-  if NodeBottom < 1 then
-    PanY := PanY + (1 - NodeBottom);
-  // Top edge clamp
-  if NodeTop > PBHeight - 1 then
-    PanY := PanY - (NodeTop - (PBHeight - 1));
-end;
-
-
-
-
-
-
-procedure TForm1.DrawRouteEveStyle(Bitmap: TBitmap; const Route: TJumpRoute; MarginPct: Double = 0.12);
-var
-  i, SecIdx: Integer;
-  LabelX, LabelY, PBWidth, PBHeight, Margin: Integer;
-  XMin, XMax, ZMin, ZMax, MapSize, ClampedZoom: Double;
-  Security: Double;
-  RouteDashLen, RouteGapLen, RouteLineWidth: Integer;
-  NodeGlowRadius, NodeRadius: Double;
-  LabelHeight, LabelWidth, LabelFontSize, DebugFontSize: Integer;
-  dx, dy, x, y, x2, y2, segLen, t: Double;
-  ColorA, ColorB: TColor;
-  LabelText, SysTxt, SecTxt: string;
-  GPGraphics: TGPGraphics;
-  GPFont: TGPFont;
-  LabelBrush: TGPSolidBrush;
-  Origin: TGPPointF;
-
-  procedure DrawAlphaNode(
-    Bitmap: TBitmap;
-    X, Y: Integer;
-    BaseColor: TColor;
-    Zoom: Double;
-    Selected: Boolean;
-    Hilited: Boolean
-  );
-  var
-    Graphics: TGPGraphics;
-    GlowBrush: TGPSolidBrush;
-    OutlinePen: TGPPen;
-    GlowColor: TGPColor;
-    GlowRadius, NodeRadius, r: Double;
-    BaseR, BaseG, BaseB: Integer;
-    alpha: Integer;
-    Steps, step: Integer;
-    frac: Double;
-    MaxAlpha: Integer;
-    Scale: Double;
-  begin
-    Scale := 1 - 0.1 * ((Zoom - MIN_ZOOM) / (MAX_ZOOM - MIN_ZOOM));
-    GlowRadius := 7 * Scale * 0.85;
-    NodeRadius := 7 * Scale;
-    Steps := 15;
-    MaxAlpha := 65;
-    Graphics := TGPGraphics.Create(Bitmap.Canvas.Handle);
-    BaseR := GetRValue(BaseColor);
-    BaseG := GetGValue(BaseColor);
-    BaseB := GetBValue(BaseColor);
-
-    // --- Draw outer glow ---
-    for step := Steps downto 1 do
-    begin
-      frac := step / Steps;
-      r := GlowRadius * frac;
-      alpha := Round(MaxAlpha * frac * frac * frac);
-      if alpha > 0 then
-      begin
-        GlowColor := MakeColor(alpha, BaseR, BaseG, BaseB);
-        GlowBrush := TGPSolidBrush.Create(GlowColor);
-        Graphics.FillEllipse(GlowBrush, Round(X - r), Round(Y - r), Round(r * 2), Round(r * 2));
-        GlowBrush.Free;
-      end;
-    end;
-
-    // --- Highlight logic: white ellipse, faded or solid ---
-    if Selected then
-    begin
-      OutlinePen := TGPPen.Create(MakeColor(255, 255, 255, 255), 2);
-      Graphics.DrawEllipse(OutlinePen, Round(X - NodeRadius), Round(Y - NodeRadius), Round(NodeRadius * 2), Round(NodeRadius * 2));
-      OutlinePen.Free;
-    end
-    else if Hilited then
-    begin
-      OutlinePen := TGPPen.Create(MakeColor(128, 255, 255, 255), 2); // faded (semi-transparent)
-      Graphics.DrawEllipse(OutlinePen, Round(X - NodeRadius), Round(Y - NodeRadius), Round(NodeRadius * 2), Round(NodeRadius * 2));
-      OutlinePen.Free;
-    end;
-
-    Graphics.Free;
-  end;
-
-
-
-begin
-  // --- Adjustable parameters ---
-  RouteDashLen     := 12;
-  RouteGapLen      := 8;
-  RouteLineWidth   := 2;
-  NodeGlowRadius   := 0.1;
-  NodeRadius       := 0.1;
-  LabelFontSize    := 10;
-  DebugFontSize    := 10;
-
-  Bitmap.PixelFormat := pf32bit; // Enable alpha channel for blending
-  PBWidth := Bitmap.Width;
-  PBHeight := Bitmap.Height;
-  Margin := Round(PBWidth * MarginPct);
-  Bitmap.Canvas.Brush.Color := $1A1A1A;
-  Bitmap.Canvas.FillRect(Rect(0, 0, PBWidth, PBHeight));
-
-  ClampedZoom := ClampDouble(Zoom, MIN_ZOOM, MAX_ZOOM);
-  if Abs(ClampedZoom - 1.0) < 1e-6 then
-  begin
-    PanX := 0;
-    PanY := 0;
-  end;
-
-  // --- Calculate bounds ---
-  XMin := SystemRecs[0].x; XMax := SystemRecs[0].x;
-  ZMin := SystemRecs[0].z; ZMax := SystemRecs[0].z;
-  for i := 1 to High(SystemRecs) do
-  begin
-    XMin := Min(XMin, SystemRecs[i].x);
-    XMax := Max(XMax, SystemRecs[i].x) + 40;
-    ZMin := Min(ZMin, SystemRecs[i].z);
-    ZMax := Max(ZMax, SystemRecs[i].z);
-  end;
-  MapSize := Max(XMax - XMin, ZMax - ZMin);
-
-  // --- Project coordinates with pan and zoom ---
-  SetLength(Cx, Length(SystemRecs));
-  SetLength(Cy, Length(SystemRecs));
-  for i := 0 to High(SystemRecs) do
-  begin
-    Cx[i] := Margin + Round((SystemRecs[i].x - XMin) / MapSize * (PBWidth - 2 * Margin) * ClampedZoom) + PanX;
-    Cy[i] := Margin + Round((-(SystemRecs[i].z - ZMax)) / MapSize * (PBHeight - 2 * Margin) * ClampedZoom) + PanY;
-  end;
-
-  ClampPanInView(PanX, PanY, Cx, Cy, PBWidth, PBHeight);
-
-  // --- Dashed, animated route lines ---
-  for i := 0 to High(SystemRecs) - 1 do
-  begin
-    ColorA := ColorToRGB(SecurityColors[Max(Round(SystemRecs[i].Security * 10), 0)]);
-    ColorB := ColorToRGB(SecurityColors[Max(Round(SystemRecs[i+1].Security * 10), 0)]);
-    // Swap: source <-> destination
-    // Reverse segment direction
-    dx := (Cx[i] - Cx[i+1]);
-    dy := (Cy[i] - Cy[i+1]);
-    segLen := sqrt(dx*dx + dy*dy);
-    var PatternLen := RouteDashLen + RouteGapLen;
-    var FracMod := DashAnimPhase mod PatternLen;
-    t := -FracMod;
-    while t < segLen do
-    begin
-      // Reverse interpolation: from dest to source
-      x := Cx[i+1] + dx * (Max(t, 0)/segLen);
-      y := Cy[i+1] + dy * (Max(t, 0)/segLen);
-      x2 := Cx[i+1] + dx * (Min((t+RouteDashLen), segLen)/segLen);
-      y2 := Cy[i+1] + dy * (Min((t+RouteDashLen), segLen)/segLen);
-
-      var frac := Max(t, 0) / segLen;
-      // Reverse color blend: frac runs 0..1 as dash moves from dest to source
-      var DashColor := RGB(
-        Round((1-frac)*GetRValue(ColorB) + frac*GetRValue(ColorA)),
-        Round((1-frac)*GetGValue(ColorB) + frac*GetGValue(ColorA)),
-        Round((1-frac)*GetBValue(ColorB) + frac*GetBValue(ColorA))
-      );
-
-      if t + RouteDashLen > 0 then
-      begin
-        Bitmap.Canvas.Pen.Color := DashColor;
-        Bitmap.Canvas.Pen.Width := RouteLineWidth;
-        Bitmap.Canvas.Pen.Style := psSolid;
-        Bitmap.Canvas.MoveTo(Round(x), Round(y));
-        Bitmap.Canvas.LineTo(Round(x2), Round(y2));
-      end;
-      t := t + PatternLen;
-    end;
-  end;
-
-
-
-  // --- Node rendering: alpha glow and hover outline ---
-  for i := 0 to High(SystemRecs) do
-  begin
-    Security := SystemRecs[i].Security;
-    SecIdx := Max(Round(Security * 10), 0);
-    ColorA := ColorToRGB(SecurityColors[SecIdx]);
-    // Pass flags for selected and hilited
-    DrawAlphaNode(
-      Bitmap,
-      Cx[i],
-      Cy[i],
-      ColorA,
-      ClampedZoom,
-      (i = SelectedNodeIdx),     // Selected: draw solid white ellipse
-      (i = HilitedNodeIdx) and (i <> SelectedNodeIdx) // Hilited but not selected: draw faded ellipse
-    );
-  end;
-
-
-
-  // --- Multi-color overlay labels ---
-  for i := 0 to High(SystemRecs) do
-  begin
-    Security := SystemRecs[i].Security;
-    SecIdx := Max(Round(Security * 10), 0);
-    ColorA := ColorToRGB(SecurityColors[SecIdx]);
-    Bitmap.Canvas.Font.Name := 'Bahnschrift SemiCondensed';
-    Bitmap.Canvas.Font.Size := 10;
-    Bitmap.Canvas.Brush.Style := bsClear;
-    var zoomOffset := Round(2 * Min(ClampedZoom, 5));
-    var labelOffset := 4 + zoomOffset;
-    SysTxt := SystemRecs[i].SystemName + ' ';
-    SecTxt := Format('%.1f', [Security]);
-    LabelText := SysTxt + SecTxt;
-    LabelWidth := Bitmap.Canvas.TextWidth(LabelText);
-    LabelHeight := Bitmap.Canvas.TextHeight(LabelText);
-
-    // Unclamped position for fade
-    var unclampedLabelX := Cx[i] + labelOffset;
-    var unclampedLabelY := Cy[i] - 5;
-
-    // Clamp for rendering
-    LabelX := unclampedLabelX;
-    LabelY := unclampedLabelY;
-    if LabelX + LabelWidth > PBWidth then
-      LabelX := PBWidth - LabelWidth - 2;
-    if LabelX < 2 then
-      LabelX := 2;
-    if LabelY < 2 then
-      LabelY := 2;
-    if LabelY + LabelHeight > PBHeight then
-      LabelY := PBHeight - LabelHeight - 2;
-
-    // Fade calculation for edges
-    var fadeRight := ClampDouble((PBWidth - (unclampedLabelX + LabelWidth)) / LABEL_FADE_MARGIN, 0, 1);
-    var fadeLeft := ClampDouble((unclampedLabelX - 2) / LABEL_FADE_MARGIN, 0, 1);
-    var fadeTop := ClampDouble((unclampedLabelY - 2) / LABEL_FADE_MARGIN, 0, 1);
-    var fadeBottom := ClampDouble((PBHeight - (unclampedLabelY + LabelHeight)) / LABEL_FADE_MARGIN, 0, 1);
-    var posFade := Min(Min(fadeRight, fadeLeft), Min(fadeTop, fadeBottom));
-
-    // Fade for non-end labels based on zoom (only applies to intermediate labels)
-    var zoomFade: Double := 1.0;
-    if (i <> 0) and (i <> High(SystemRecs)) then
-    begin
-      if ClampedZoom <= 1.75 then
-        zoomFade := 0.0
-      else
-        zoomFade := ClampDouble((ClampedZoom - 1.75) / (MAX_ZOOM - 1.75), 0.0, 1.0);
-    end;
-
-    var finalFade := posFade * zoomFade;
-
-    // Source and destination labels are always drawn at full fade
-    if (i = 0) or (i = High(SystemRecs)) then
-      finalFade := posFade;
-
-    var Alpha := Round(255 * finalFade);
-
-    // --- Draw visible, fade-appropriate label ---
-    if Alpha > 0 then
-    begin
-      GPGraphics := TGPGraphics.Create(Bitmap.Canvas.Handle);
-      GPFont := TGPFont.Create('Bahnschrift SemiCondensed', 10);
-
-      // Main system name in white
-      LabelBrush := TGPSolidBrush.Create(MakeColor(Alpha, 255, 255, 255));
-      Origin.X := LabelX;
-      Origin.Y := LabelY;
-      GPGraphics.DrawString(SysTxt, Length(SysTxt), GPFont, Origin, LabelBrush);
-      LabelBrush.Free;
-      // Security value in color
-      LabelBrush := TGPSolidBrush.Create(MakeColor(Alpha, GetRValue(ColorA), GetGValue(ColorA), GetBValue(ColorA)));
-      Origin.X := LabelX + Bitmap.Canvas.TextWidth(SysTxt);
-      GPGraphics.DrawString(SecTxt, Length(SecTxt), GPFont, Origin, LabelBrush);
-      LabelBrush.Free;
-      GPFont.Free;
-      GPGraphics.Free;
-    end;
-  end;
-end;
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 procedure TForm1.GridTradeResultsMouseUp(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
 var
@@ -2112,12 +1459,6 @@ begin
         ItemBitmap := Downloader.GetEveImageBitmap('types', ShipTypeID.ToString, 'icon', '64');
       PaintBoxItemType.Invalidate; // Triggers repaint
 
-
-
-
-
-
-
       PanelItemSummary.Visible := true;
       MyRoute := Order.JumpRoute;  // or similar, depending on your model
       // --- Map Route.SystemIDs to SystemRecs ---
@@ -2168,10 +1509,10 @@ begin
       Font.Style := [];
       Font.Size := 12;
       if (TradeHistory.Count > 0) and
-         (ACol >= 0) and (ACol < Length(CellColors)) and
-         (ARow >= 0) and (ARow < Length(CellColors[ACol])) and
-         (CellColors[ACol, ARow] <> clNone) then
-        Font.Color := CellColors[ACol, ARow]
+         (ACol >= 0) and (ACol < Length(GridHelper.History.CellColors)) and
+         (ARow >= 0) and (ARow < Length(GridHelper.History.CellColors[ACol])) and
+         (GridHelper.History.CellColors[ACol, ARow] <> clNone) then
+        Font.Color := GridHelper.History.CellColors[ACol, ARow]
       else
         Font.Color := clWhite;
     end;
@@ -2206,7 +1547,8 @@ begin
   GridTradeHistory.MouseToCell(X, Y, Col, Row);
   if Row = 0 then
   begin
-    OutputTradeHistory(Col);
+    GridHelper.History.OutputToGrid(GridTradeHistory, TradeHistory, RegionManager, 0, FSortDescending);
+//    OutputTradeHistory(Col);
     FSortDescending := not FSortDescending;
   end;
 end;
@@ -2273,39 +1615,43 @@ end;
 procedure TForm1.PopupMenuMarketTreePopup(Sender: TObject);
 var
   Node: TTreeNode;
-  Data: PMarketTreeNodeRec;
+  Data: TMarketTreeNodeData;
 begin
-  // Uses selected node (single-selection mode)
   Node := TreeViewMarket.Selected;
   if (Node <> nil) and (Node.Data <> nil) then
   begin
-    Data := PMarketTreeNodeRec(Node.Data);
-    if Data^.IsItem then
-      AddManualTransaction1.Enabled := true
+    Data := TMarketTreeNodeData(Node.Data);
+    if Data.IsItem then
+      AddManualTransaction1.Enabled := True
     else
       AddManualTransaction1.Enabled := False;
-  end;
+  end
+  else
+    AddManualTransaction1.Enabled := False;
 end;
 
 procedure TForm1.EditFilterMarketChange(Sender: TObject);
 begin
-  if (EditFilterMarket.Text <> '') and (Length(EditFilterMarket.Text) > 3) then
+  if (EditFilterMarket.Text <> '') then
   begin
     TimerMarketFilter.Enabled := False;
     TimerMarketFilter.Enabled := True;
-    // You will set FMarketTreeIsFiltered := True when your filter routine runs
+    // FMarketTreeIsFiltered will be set True when the filter runs
   end
   else
   begin
-    if FMarketTreeIsFiltered then
+    if TMarketTreeBuilder.IsFiltered then
     begin
-      BuildMarketTree(TreeViewMarket, Parser.FMarketGroups, Parser.FParentToChildren, Parser.FTypes);
+      // Use your currently enabled build:
+      TMarketTreeBuilder.BuildFullMarketTree(TreeViewMarket, Parser.FMarketGroups, Parser.FParentToChildren, Parser.FTypes);
+      //TMarketTreeAsyncBuilder.BuildFullMarketTreeAsync(TreeViewMarket, Parser.FMarketGroups, Parser.FParentToChildren, Parser.FTypes);
+
       FMarketTreeIsFiltered := False;
     end;
-    // If it's already unfiltered, do nothing
+    // If already unfiltered, do nothing
   end;
-
 end;
+
 
 procedure TForm1.TimerAnimateLinesTimer(Sender: TObject);
 begin
@@ -2317,7 +1663,9 @@ procedure TForm1.TimerMarketFilterTimer(Sender: TObject);
 begin
   Logger.Log(Format('Filtering Market Tree: %s', [EditFilterMarket.Text]));
   TimerMarketFilter.Enabled := False;
-  FilterMarketTree(EditFilterMarket.Text);
+  //FilterMarketTree(EditFilterMarket.Text);
+  TMarketTreeBuilder.FilterMarketTree(TreeViewMarket, Parser.FMarketGroups, Parser.FTypes, Parser.FParentToChildren, EditFilterMarket.Text);
+
 end;
 
 
@@ -2334,26 +1682,25 @@ end;
 procedure TForm1.TreeViewMarketDblClick(Sender: TObject);
 var
   Node: TTreeNode;
-  Data: PMarketTreeNodeRec;
+  Data: TMarketTreeNodeData;
 begin
   // Uses selected node (single-selection mode)
   Node := TreeViewMarket.Selected;
   if (Node <> nil) and (Node.Data <> nil) then
   begin
-    Data := PMarketTreeNodeRec(Node.Data);
+    Data := TMarketTreeNodeData(Node.Data);
     Logger.Log(
-      'Name='         + Data^.Name +
-      ', MarketGroupID=' + Data^.MarketGroupID +
-      ', ParentGroupID=' + Data^.ParentGroupID +
-      ', IsItem='     + BoolToStr(Data^.IsItem, True) +
-      ', HasTypes='   + BoolToStr(Data^.HasTypes, True) +
-      ', TypeID='     + Data^.TypeID.ToString +
-      ', IconID='     + Data^.IconID.ToString +
-      ', Description=' + Data^.Description
+      'Name='         + Data.Name +
+      ', MarketGroupID=' + Data.MarketGroupID +
+      ', ParentGroupID=' + Data.ParentGroupID +
+      ', IsItem='     + BoolToStr(Data.IsItem, True) +
+      ', HasTypes='   + BoolToStr(Data.HasTypes, True) +
+      ', TypeID='     + Data.TypeID.ToString +
+      ', IconID='     + Data.IconID.ToString +
+      ', Description=' + Data.Description
     );
   end;
 end;
-
 
 procedure TForm1.TreeViewMarketMouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer);
 var
